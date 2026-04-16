@@ -1,5 +1,5 @@
 ---
-name: Archia ADK
+name: archia-adk
 metadata:
   author: Archia.io
 version: 0.1.0
