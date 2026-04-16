@@ -2,7 +2,7 @@
 name: archia-adk
 metadata:
   author: Archia.io
-version: 0.1.0
+version: 0.1.1
 description: Integrate with Archia Cloud API — manage models, agents, tools, and LLM responses via registry.archia.app
 user_invocable: true
 command: archia
