@@ -87,7 +87,7 @@ curl -sS "${ARCHIA_BASE_URL}/v1/responses" \
   }'
 ```
 
-Expected: HTTP 200, JSON with `status: "completed"`, text in `output[0].content[0].text`.
+Expected: HTTP 200, JSON with `status: "completed"`. Collect every `output_text` part from every `message` item in `output` (see Response Parsing below). Reasoning or tools can appear first, and tool-only responses have no message text.
 
 #### Streaming (SSE)
 
@@ -104,6 +104,10 @@ curl -sS "${ARCHIA_BASE_URL}/v1/responses" \
 ```
 
 Event types: `response.created`, `response.output_text.delta`, `response.output_text.done`, `response.completed`, `data: [DONE]`.
+
+Output items follow execution order in both SSE and WebSocket responses. Older streamed responses combined all text in a single message at index 0; clients must now handle reasoning first, tool-only turns, and multiple messages split around tools. Append `response.output_text.delta` values for live text. Each `response.output_text.done` contains one content part, not the whole answer; do not append it again after its deltas. Use `response.completed.response.output` for the complete ordered output. Item/text completion events can arrive after later items are announced.
+
+Non-streaming and stored output also contains only the current turn. `previous_response_id` and replayed `input` supply model context; keep prior turns in the client's transcript rather than expecting earlier answers to be repeated in the new response.
 
 ### Agent Management
 
@@ -217,33 +221,31 @@ curl -sS "${ARCHIA_BASE_URL}/v1/responses" \
 ## Response Parsing (Non-Streaming)
 
 1. Verify `status == "completed"` before reading text.
-2. Extract: `output` -> first item with `type == "message"` -> `content` -> first item with `type == "output_text"` -> `.text`.
+2. Concatenate `.text` from every content part with `type == "output_text"` in every output item with `type == "message"`, in array order. Ignore reasoning and tool items; return an empty string when no text is present.
 3. If `status == "failed"`, inspect `.error`.
 
 **Python:**
 
 ```python
-def extract_output_text(response_json: dict) -> str | None:
-    for item in response_json.get("output", []):
-        if item.get("type") == "message":
-            for content in item.get("content", []):
-                if content.get("type") == "output_text":
-                    return content.get("text")
-    return None
+def extract_output_text(response_json: dict) -> str:
+    return "".join(
+        part.get("text", "")
+        for item in response_json.get("output", [])
+        if item.get("type") == "message"
+        for part in item.get("content", [])
+        if part.get("type") == "output_text"
+    )
 ```
 
 **TypeScript:**
 
 ```typescript
-function extractOutputText(resp: any): string | undefined {
-  for (const item of resp?.output ?? []) {
-    if (item?.type === "message") {
-      for (const part of item?.content ?? []) {
-        if (part?.type === "output_text") return part?.text;
-      }
-    }
-  }
-  return undefined;
+function extractOutputText(resp: any): string {
+  return (resp?.output ?? [])
+    .filter((item: any) => item?.type === "message")
+    .flatMap((item: any) => item.content ?? [])
+    .flatMap((part: any) => part?.type === "output_text" ? [part.text ?? ""] : [])
+    .join("");
 }
 ```
 
@@ -262,7 +264,13 @@ client = OpenAI(
 )
 
 resp = client.responses.create(model="claude-sonnet-4-6", input="Say hello.")
-print(resp.output[0].content[0].text)
+print("".join(
+    part.text
+    for item in resp.output
+    if item.type == "message"
+    for part in item.content
+    if part.type == "output_text"
+))
 ```
 
 **TypeScript:**
@@ -280,7 +288,12 @@ const resp = await client.responses.create({
   model: "claude-sonnet-4-6",
   input: "Say hello.",
 });
-console.log(resp.output?.[0]?.content?.[0]?.text);
+const outputText = resp.output
+  .filter(item => item.type === "message")
+  .flatMap(item => item.content)
+  .flatMap(part => part.type === "output_text" ? [part.text] : [])
+  .join("");
+console.log(outputText);
 ```
 
 ## MCP Marketplace (Database ODBC)
